@@ -29,7 +29,6 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             weight: ?W,
         };
 
-
         pub fn init(allocator: Allocator) Self {
             return Self {
                 .allocator = allocator,
@@ -53,6 +52,26 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             try self.nodes.put(value, node_ptr.*);
 
             return;
+        }
+
+        pub fn newEdge(self: *Self, from: T, to: T, weight: ?W) !void {
+            var from_node = try getNode(from);
+            const to_node   = try getNode(to);
+
+            if (from_node == null or to_node == null) return GraphError.NodeNotFound;
+
+            const edge_ptr: *Edge = try self.allocator.create(Edge);
+            edge_ptr.* = .{
+                .next = to_node,
+                .weight = weight,
+            };
+
+            from_node.nh.append(edge_ptr);
+
+        }
+
+        fn getNode(self: Self, value: T) ?*Node {
+            return &self.nodes.get(value);
         }
     };
 }
