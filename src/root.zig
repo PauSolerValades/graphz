@@ -17,11 +17,11 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         const Self = @This();
 
         allocator: Allocator,
-        nodes: AutoHashMap(T, Node),         //stores the nodes
+        nodes: AutoHashMap(T, *Node),         //stores the nodes
 
         const Node = struct {
             value: T,
-            nh: std.ArrayListAligned(Edge, null),
+            nh: std.ArrayListAligned(*Edge, null),
         };
 
         const Edge = struct {
@@ -32,7 +32,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         pub fn init(allocator: Allocator) Self {
             return Self {
                 .allocator = allocator,
-                .nodes = AutoHashMap(T, Node).init(allocator),                
+                .nodes = AutoHashMap(T, *Node).init(allocator),                
             };
         }
         
@@ -46,12 +46,19 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
             node_ptr.* = .{
                .value = value,
-               .nh = try ArrayList(Edge).initCapacity(self.allocator, CAPACITY), 
+               .nh = try ArrayList(*Edge).initCapacity(self.allocator, CAPACITY), 
             };
 
-            try self.nodes.put(value, node_ptr.*);
+            try self.nodes.put(value, node_ptr);
 
             return;
+        }
+        
+        pub fn removeNode(self: *Self, value: T) !void {
+            const node_ptr: *Node = try self.getNode(value);
+            node_ptr.nh.clearAndFree();
+            node_ptr.nh.deinit();
+            self.allocator.destroy(node_ptr);
         }
 
         pub fn newEdge(self: *Self, from: T, to: T, weight: ?W) !void {
@@ -64,12 +71,12 @@ pub fn Graph(comptime T: type, comptime W: type) type {
                 .weight = weight,
             };
 
-            try from_node.nh.append(edge_ptr.*);
+            try from_node.nh.append(edge_ptr);
 
         }
 
         fn getNode(self: Self, value: T) !*Node {
-            const node_ptr: ?*Node = self.nodes.getPtr(value);
+            const node_ptr: ?*Node = self.nodes.get(value);
             if (node_ptr) |node| {
                 return node;
             }
