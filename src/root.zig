@@ -18,7 +18,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         const Self = @This();
 
         allocator: Allocator,
-        nodes: AutoHashMap(T, *Node),         //stores the nodes
+        nodes: AutoHashMap(T, *Node),
 
         const Node = struct {
             value: T,
@@ -36,6 +36,18 @@ pub fn Graph(comptime T: type, comptime W: type) type {
                 .allocator = allocator,
                 .nodes = AutoHashMap(T, *Node).init(allocator),                
             };
+        }
+        
+        pub fn deinit(self: *Self) void {
+            var iterator = self.nodes.iterator();
+            while (iterator.next()) |entry| {
+                const node = entry.value_ptr.*;
+
+                node.edges_in.deinit();
+                node.edges_out.deinit();
+            }
+
+            self.nodes.deinit();
         }
         
         pub fn newNode(self: *Self, value: T) !void {
@@ -59,7 +71,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         
         pub fn removeNode(self: *Self, value: T) !void {
             const node_ptr: *Node = try self.getNode(value);
-            defer self.nodes.remove(value); // delete from the dictionary
+            defer _ = self.nodes.remove(value); // delete from the dictionary
             
             // delete the arraylist 
             node_ptr.edges_in.clearAndFree();
