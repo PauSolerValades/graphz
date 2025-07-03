@@ -22,7 +22,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
         const Node = struct {
             value: T,
-            nh: std.ArrayListAligned(*Edge, null),
+            edges_out: std.ArrayListAligned(*Edge, null),
+            edges_in: std.ArrayListAligned(*Edge, null),
         };
 
         const Edge = struct {
@@ -47,7 +48,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
             node_ptr.* = .{
                .value = value,
-               .nh = try ArrayList(*Edge).initCapacity(self.allocator, CAPACITY), 
+               .edges_in = try ArrayList(*Edge).initCapacity(self.allocator, CAPACITY), 
+               .edges_out = try ArrayList(*Edge).initCapacity(self.allocator, CAPACITY), 
             };
 
             try self.nodes.put(value, node_ptr);
@@ -57,16 +59,29 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         
         pub fn removeNode(self: *Self, value: T) !void {
             const node_ptr: *Node = try self.getNode(value);
-            node_ptr.nh.clearAndFree();
-            node_ptr.nh.deinit();
+            defer self.nodes.remove(value); // delete from the dictionary
+            
+            // delete the arraylist 
+            node_ptr.edges_in.clearAndFree();
+            node_ptr.edges_in.deinit();
+
+            // delete the arraylist 
+            node_ptr.edges_out.clearAndFree();
+            node_ptr.edges_out.deinit();
+            
+            // delete the node
             self.allocator.destroy(node_ptr);
+
         }
 
         pub fn newEdge(self: *Self, from: T, to: T, weight: ?W) !void {
             var from_node = try self.getNode(from);
-            const to_node = try self.getNode(to);
-            if (self.hasEdge(from, to)) return GraphError.RepeatedEdgeInsertion;
+            var to_node = try self.getNode(to);
 
+            // we check for the same edge in both nodes
+            if (self.hasEdge(from, to)) return GraphError.RepeatedEdgeInsertion;
+            
+            // create requested edge with original direction
             const edge_ptr: *Edge = try self.allocator.create(Edge);
 
             edge_ptr.* = .{
@@ -74,15 +89,29 @@ pub fn Graph(comptime T: type, comptime W: type) type {
                 .weight = weight,
             };
 
-            try from_node.nh.append(edge_ptr);
+            try from_node.edges_out.append(edge_ptr);
+            try to_node.edges_in.append(edge_ptr);
+            
         }
 
 
         pub fn removeEdge(self: *Self, from: T, to: T) !void{
-            const node: *Node = try self.getNode(from); // Node where the Edge to remove is stored
-            for (0.., node.*.nh.items) |idx, edge| {
+            const from_node: *Node = try self.getNode(from); // Node where the Edge to remove is stored
+            var found: bool = false;
+
+            for (0.., from_node.*.edges_out.items) |idx, edge| {
                 if (edge.next.value == to) {
-                    self.allocator.destroy(node.*.nh.swapRemove(idx));
+                    _ = from_node.*.edges_out.swapRemove(idx);
+                    found = true;
+                }
+            }
+            
+            if (!found) return GraphError.EdgeNotFound;
+
+            const to_node: *Node = try self.getNode(to); // Node where the Edge to remove is stored
+            for (0.., to_node.*.edges_in.items) |idx, edge| {
+                if (edge.next.value == to) {
+                    self.allocator.destroy(to_node.*.edges_in.swapRemove(idx));
                     return;
                 }
             }
@@ -92,7 +121,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
         pub fn hasEdge(self: Self, from: T, to: T) bool {
             const from_node = self.nodes.get(from) orelse return false;
-            for(from_node.nh.items) |item| {
+            for(from_node.edges_out.items) |item| {
                 if (item.next.value == to) return true;
             }
 
@@ -102,7 +131,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         pub fn getEdge(self:Self, from: T, to: T) !*Edge {
             const opt_from_node = self.nodes.get(from);
             if (opt_from_node) |*node| {
-                for(node.*.nh.items) |edge| {
+                for(node.*.edges_out.items) |edge| {
                     if (edge.next.value == to) return edge;
                 }
             } 
@@ -112,7 +141,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         pub fn getEdgeIndex(self:Self, from: T, to: T) !usize {
             const opt_from_node = self.nodes.get(from);
             if (opt_from_node) |*node| {
-                for(0..,node.*.nh.items) |i, edge| {
+                for(0..,node.*.edges_out.items) |i, edge| {
                     if (edge.next.value == to) return i;
                 }
             } 
