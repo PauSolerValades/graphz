@@ -87,7 +87,7 @@ pub fn Graph(comptime T: type, comptime W: type, comptime capacity: u32) type {
             const node_from = try self.getNodeByValue(value_from);
             const node_to = try self.getNodeByValue(value_to);
 
-            const edge_ptr: *Egde = try self.allocator.create(Edge);
+            const edge_ptr: *Edge= try self.allocator.create(Edge);
             
             edge_ptr.from = self.nodes[node_from];
             edge_ptr.to = self.nodes[node_to];
