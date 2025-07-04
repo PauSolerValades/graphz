@@ -61,6 +61,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
 
             //TODO: Idea -> Why dont we just call `removeNode()` and pass the Node value?
+            // PAU: those are two get on the hash, i felt it was better to just remove it all
             while (iterator.next()) |node| {
                 //const node = entry.value_ptr.*;
                 // TODO: no entenc perque això necessita 
@@ -93,6 +94,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             
             // manage some allocator fail state freeing all available memory 
             // TODO: Why do you need to this? If the allocation fails why do we deinit the arraylist if they have not been allocated?
+            // PAU: I think it's more of a: imagine we allocate the first list but not the second stuff?
             errdefer {
                 node_ptr.edges_in.deinit();
                 node_ptr.edges_out.deinit();
@@ -136,10 +138,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
                 try self.removeEdge(from_value, value); 
             }
 
-            // delete the inner arraylist, with nothing
+            // delete the inner arraylist, with no elements 
             node.edges_in.deinit();
-
-            // delete the outer arraylist, with nothing
             node.edges_out.deinit();
             
             // delete the node
@@ -209,6 +209,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             }
 
         }
+
         pub fn hasEdge(self: Self, from: T, to: T) bool {
             const from_node = self.nodes.get(from) orelse return false;
             for(from_node.edges_out.items) |edge| {
@@ -253,83 +254,158 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 // and try to use the "zig" way. Take a look at how the std.ArrayList does the test.
 // Instead of focusing on cases, it focus on functions. From the basics to the most complex.
 // For example a test could be "Graph.init", or "Graph.newNode()".
+//
+// PAU: yeah sure :)
+//
+// like:
+// 1. init
+// 2. deinit
+// 3. addNode -> multiple instances checking if the node has actually appended. check the error
+// 4. addEdge -> check if actually the edge is correct. check the duplicate error
+// 5. hasEdge -> check if some are actually there. check the not found error
+// 6. removeNode -> check if all the edges and nodes are actually deleted
+// 7. removeEgde -> check if all the edges are deleted.
 
+const testing = std.testing;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
+const expectError = std.testing.expectError;
 
-test "Graph: init and deinit empty graph" {
-    const talloc = std.testing.allocator;
-    var graph = Graph(u8, f16).init(talloc);
-    defer graph.deinit(); 
+test "init" = {
+    {
+        var graph = Graph(u32, f16).init(std.testing.allocator);
+        defer graph.deinit();
+
+        // list should be at zero capacity
+        try expect(graph.nodes.count == 0); 
+    }
+
 }
 
-test "Graph: Adding and removing node" {
-    const talloc = std.testing.allocator;
-    var graph = Graph(u32, f16).init(talloc);
-    defer graph.deinit();
+test "addNodes" {
+    {
+        const talloc = std.testing.allocator;
+        var graph = Graph(u32, f16).init(talloc);
+        defer graph.deinit();
 
-    try graph.newNode(1);
-    try graph.removeNode(1);
+        try graph.newNode(1);
+
+        const node = graph.nodes.get(1);
+        try expect(node != null);
+        try expectEqual(node.?.value, 1);
+        try expectEqual(node.?.edges_in.items.len, 0);
+        try expectEqual(node.?.edges_out.items.len, 0);
+    }
+    {
+        const talloc = std.testing.allocator;
+        var graph = Graph(u32, f16).init(talloc);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+        try expectError(GraphError.RepeatedNodeInsertion, graph.newNode(1));
+    }
+    {   // insert lots of nodes
+        var graph = Graph(u32, f16).init(testing.allocator);
+        const nodes = [_]u32{1,2,3,4,5,6,7,8,9,0};
+
+        for (nodes) |i| {
+            try graph.newNode(i);
+        }
+    }
 }
 
-test "Graph: deinit non empty graph" {
-    const talloc = std.testing.allocator;
-    var graph = Graph(u32, f16).init(talloc);
-    defer graph.deinit();
+test "removeNodes" {
+    {
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
 
-    try graph.newNode(1);
+        try graph.newNode(1);
+        try graph.removeNode(1);
+
+        const node = graph.nodes.get(1);
+        try expect(node == null);
+        try expect(graph.nodes.count == 0);
+    }
+    {
+        const talloc = std.testing.allocator;
+        var graph = Graph(u32, f16).init(talloc);
+        defer graph.deinit();
+
+        try expectError(GraphError.NodeNotFound, graph.newNode(1));
+        try expect(graph.nodes.count == 0);
+    }
+    {
+        var graph = Graph(u32, f16).init(testing.allocator);
+        const nodes = [_]u32{1,2,3,4,5,6,7,8,9,0};
+
+        for (nodes) |i| {
+            try graph.newNode(i);
+        }
+
+        for (nodes) |i| {
+            try graph.removeNode(i);
+        }
+    }
+}
+
+test "newEdge" {
+    {
+        const talloc = std.testing.allocator;
+        var graph = Graph(u32, f16).init(talloc);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+        try graph.newNode(2);
+
+        try graph.newEdge(1,2,null);
+        
+        const node1 = graph.nodes.get(1);
+        const node2 = graph.nodes.get(2);
+
+        try expect(node1.?.edges_in.items.len == 1);
+        try expect(node1.?.edges_out.items.len == 0);
+        try expect(node2.?.edges_in.items.len == 0);
+        try expect(node2.?.edges_out.items.len == 1);
+
+    }
+    { //from yourelf to yourself
+        const talloc = std.testing.allocator;
+        var graph = Graph(u32, f16).init(talloc);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+
+        try graph.newEdge(1,1,null);
+        
+        const node1 = graph.nodes.get(1);
+
+        try expect(node1.?.edges_in.items.len == 1);
+        try expect(node1.?.edges_out.items.len == 1);
+    }
+    { // non exising nodes -> node not found OJU QUE AIXÒ NO VA
+        const talloc = std.testing.allocator;
+        var graph = Graph(u32, f16).init(talloc);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+        try graph.newNode(2);
+
+        try expectError(GraphError.NodeNotFound, graph.newEdge(1,3,null));
+        try expect(node1.?.edges_in.items.len == 0);
+        try expect(node1.?.edges_out.items.len == 0);
+    }
  
 }
 
-test "Graph: adding and removing multiple nodes" {
-    const talloc = std.testing.allocator;
-    var graph = Graph(u32, f16).init(talloc);
-    defer graph.deinit();
-
-    const nodes = [_]u32{1,2,3,4,5,6,7,8,9,0};
-
-    for (nodes) |i| {
-        try graph.newNode(i);
-    }
-    
-    for (nodes) |i| {
-        try graph.removeNode(i);
-    }
-} 
-
-test "Graph: adding and not removing multiple nodes" {
-    const talloc = std.testing.allocator;
-    var graph = Graph(u32, f16).init(talloc);
-    defer graph.deinit();
-
-    const nodes = [_]u32{1,2,3,4,5,6,7,8,9,0};
-
-    for (nodes) |i| {
-        try graph.newNode(i);
-    }
+test "removeEdge" {
+    // remove the edge: check it's not in any node arraylist
+    // remove a non existing edge: check it's gone in all the arraylists
 }
 
-test "Graph: adding and removing edge" {
-    const talloc = std.testing.allocator;
-    var graph = Graph(u32, f16).init(talloc);
-    defer graph.deinit();
-
-    try graph.newNode(1);
-    try graph.newNode(2);
-
-    try graph.newEdge(1,2,null);
-    try graph.removeEdge(1,2);
-}
-
-test "Graph: adding and not removing edge" {
-    const talloc = std.testing.allocator;
-    var graph = Graph(u32, f16).init(talloc);
-    defer graph.deinit();
-
-    try graph.newNode(1);
-    try graph.newNode(2);
-
-    try graph.newEdge(1,2,null);
+test "hasEdge" {
+    // edge in the graph -> true
+    // edge not in the graph -> false
+    // node of one of the edges not in the graph -> error
 }
 
 test "Graph: complete two node graph" {
