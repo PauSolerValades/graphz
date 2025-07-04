@@ -28,6 +28,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
         const Edge = struct {
             to: *Node, 
+            from: *Node, 
             weight: ?W,
         };
 
@@ -71,6 +72,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             const node_ptr: *Node = try self.allocator.create(Node);
             
             // manage some allocator fail state freeing all available memory 
+            // TODO: Why do you need to this? If the allocation fails why do we deinit the arraylist if they have not been allocated?
             errdefer {
                 node_ptr.edges_in.deinit();
                 node_ptr.edges_out.deinit();
@@ -91,11 +93,25 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             const node: *Node = try self.getNode(value);
             defer _ = self.nodes.remove(value); // delete from the dictionary
             
+
+            // value: 1
+
+            // This is not complete! If we remove a Node we ALSO have to remove ALL the edges that were coming
+            // from this node. This means we have to iterate over the `to` nodes from its edges and remove them too!
             // delete all the references arriving to this node
             // this will also delete all the references going into the node           
-            for (node.*.edges_in.items) |edge_ptr| {
-                self.allocator.destroy(edge_ptr);
+            for (node.*.edges_out.items) |edge_ptr| {
+                // Delete the out edges and remove them
+                const to_value = edge_ptr.to.value;
+                try self.removeEdge(value, to_value);
             }
+
+            for (node.*.edges_in.items) |edge_ptr| {
+                const from_value = edge_ptr.from.value;
+                try self.removeEdge(from_value, value);
+            }
+
+            // delete the inner arraylist, with nothing
             node.edges_in.deinit();
 
             // delete the outer arraylist, with nothing
@@ -119,6 +135,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             const edge_ptr: *Edge = try self.allocator.create(Edge);
 
             edge_ptr.* = .{
+                .from = from_node,
                 .to = to_node,
                 .weight = weight,
             };
@@ -146,7 +163,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             
             const to_node: *Node = try self.getNode(to); // Node where the Edge to remove is stored
             for (0.., to_node.*.edges_in.items) |idx, edge| {
-                if (edge.to.value == to) {
+                // Let's remove only THE SAME edge in terms of reference.
+                if (edge == edge_inout) {
                     edge_outin = to_node.*.edges_in.swapRemove(idx);
                     break;
                 }
@@ -197,7 +215,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
     };
 }
 
-const except = std.testing.except;
+const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 
 test "Graph: init and deinit empty graph" {
     const talloc = std.testing.allocator;
@@ -212,8 +231,6 @@ test "Graph: Adding and removing node" {
 
     try graph.newNode(1);
     try graph.removeNode(1);
-    
-     
 }
 
 test "Graph: deinit non empty graph" {
@@ -302,6 +319,39 @@ test "Graph: auto-complete two node graph" {
     try graph.newEdge(2,2, null);
 }
 
+test "Graph: delete edge two node graph" {
+    const talloc = std.testing.allocator;
+    var graph = Graph(u32, f16).init(talloc);
+    defer graph.deinit();
+
+    try graph.newNode(1);
+    try graph.newNode(2);
+
+    try graph.newEdge(1,1,null);
+    try graph.newEdge(2,2,null);
+    try graph.newEdge(2,1,null);
+    try graph.newEdge(1,2,null);
+    
+    try expect(graph.hasEdge(1,1));
+    try expect(graph.hasEdge(2,2));
+    try expect(graph.hasEdge(2,1));
+    try expect(graph.hasEdge(1,2));
+
+    try graph.removeEdge(2,1);
+
+    try expect(graph.hasEdge(1,1));
+    try expect(graph.hasEdge(2,2));
+    try expect(!graph.hasEdge(2,1));
+    try expect(graph.hasEdge(1,2));
+
+    try graph.removeEdge(2,2);
+
+    try expect(graph.hasEdge(1,1));
+    try expect(!graph.hasEdge(2,2));
+    try expect(!graph.hasEdge(2,1));
+    try expect(graph.hasEdge(1,2));
+}
+
 // aquest test no va lmao!
 test "Graph: delete edges associated to a node" {
      const talloc = std.testing.allocator;
@@ -317,14 +367,14 @@ test "Graph: delete edges associated to a node" {
     try graph.newEdge(2,2, null);
 
     try graph.removeNode(2);
-    
-    try std.testing.expectEqual(graph.nodes.get(1).?.edges_in.items.len, 1);
-    try std.testing.expectEqual(graph.nodes.get(1).?.edges_out.items.len, 1);
-    try std.testing.expect(!graph.hasEdge(1, 2));
-    try std.testing.expect(!graph.hasEdge(2, 1));
-    try std.testing.expect(!graph.hasEdge(2, 2));
 
-    try std.testing.expect(graph.hasEdge(1, 1));
+    try expectEqual(graph.nodes.get(1).?.edges_in.items.len, 1);
+    try expectEqual(graph.nodes.get(1).?.edges_out.items.len, 1);
+    try expect(!graph.hasEdge(1, 2));
+    try expect(!graph.hasEdge(2, 1));
+    try expect(!graph.hasEdge(2, 2));
+
+    try expect(graph.hasEdge(1, 1));
 }
 
 test "Graph: 10-node autocomplete graph" {
