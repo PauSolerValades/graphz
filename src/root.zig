@@ -11,24 +11,41 @@ pub const GraphError = error {
     RepeatedNodeInsertion,
     RepeatedEdgeInsertion,
 };
-
+/// Graph implemenation in Zig that gives you the functionality
+/// to do anything you'd like to do with a graph.
 pub fn Graph(comptime T: type, comptime W: type) type {
 
     return struct {
         const Self = @This();
 
+        /// How to allocate memory is up to the consumer. Zig style.
         allocator: Allocator,
+
+        /// HashMap of all Nodes in the graph. 
+        /// Instead of having a separate `edges` list each Node
+        /// has two lists: the edges coming from them and edges going towards them.
+        /// Check out below in the `Node` struct
         nodes: AutoHashMap(T, *Node),
 
+        /// Structure definition of a `Node`. 
         const Node = struct {
             value: T,
+            /// Edges that comes from the actual node and goes to another node.
             edges_out: std.ArrayListAligned(*Edge, null),
+
+            /// Edges that goes towards the actual node from any other node.
             edges_in: std.ArrayListAligned(*Edge, null),
         };
 
+
+        /// Structure definition of an `Edge`.
         const Edge = struct {
+            /// The node where the edge is directed to.
             to: *Node, 
+            /// The node where the edge comes from.
             from: *Node, 
+            /// Weight parameters. The `type` is computed at compilation time.
+            /// It can be anything, and as such, it is also `Optional`
             weight: ?W,
         };
 
@@ -41,6 +58,9 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         
         pub fn deinit(self: *Self) void {
             var iterator = self.nodes.valueIterator();
+
+
+            //TODO: Idea -> Why dont we just call `removeNode()` and pass the Node value?
             while (iterator.next()) |node| {
                 //const node = entry.value_ptr.*;
                 // TODO: no entenc perque això necessita 
@@ -88,27 +108,32 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             try self.nodes.put(value, node_ptr);
 
         }
-        
+       
+        /// Removes the Node with value `value` from the Graph.
+        /// It also removes all the edges associated with that
+        /// Node, either if they come from the Node or goes towards the Node.
+        ///
+        /// It checks the Node with value `value` exists.
         pub fn removeNode(self: *Self, value: T) !void {
             const node: *Node = try self.getNode(value);
             defer _ = self.nodes.remove(value); // delete from the dictionary
             
 
-            // value: 1
-
-            // This is not complete! If we remove a Node we ALSO have to remove ALL the edges that were coming
-            // from this node. This means we have to iterate over the `to` nodes from its edges and remove them too!
-            // delete all the references arriving to this node
-            // this will also delete all the references going into the node           
+            // Remove all edges that comes from this node
             for (node.*.edges_out.items) |edge_ptr| {
                 // Delete the out edges and remove them
                 const to_value = edge_ptr.to.value;
                 try self.removeEdge(value, to_value);
             }
 
+            // Remove all edges that goes to this node
             for (node.*.edges_in.items) |edge_ptr| {
                 const from_value = edge_ptr.from.value;
-                try self.removeEdge(from_value, value);
+
+                // Notice how now the `value` is in the `to` position
+                // when removing edges.
+                // We want to remove the edge that points towards this node.
+                try self.removeEdge(from_value, value); 
             }
 
             // delete the inner arraylist, with nothing
@@ -122,6 +147,15 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
         }
 
+        /// Creates a directed edge that goes from the Node with value `from` 
+        /// and towards the Node with value `to`.
+        ///
+        /// It checks both `from` and `to` Nodes exist.
+        ///
+        /// It adds the edge in both nodes, this is to say:
+        ///     - Adds it in the `edges_out` of the Node with value `from`.
+        ///     - Adds it in the `edges_in` of the Node with value `to`.
+        /// The edge is the same for both Nodes, it has the same reference.
         pub fn newEdge(self: *Self, from: T, to: T, weight: ?W) !void {
             var from_node = try self.getNode(from);
             var to_node = try self.getNode(to);
@@ -131,6 +165,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
                 std.debug.print("The edge {any}->{any} is already in the graph\n", .{from, to});
                 return GraphError.RepeatedEdgeInsertion;
             } 
+
             // create requested edge with original direction
             const edge_ptr: *Edge = try self.allocator.create(Edge);
 
@@ -142,7 +177,6 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
             try from_node.edges_out.append(edge_ptr);
             try to_node.edges_in.append(edge_ptr);
-            
         }
 
         // TODO: fer l'arraylist amb cerca binària per optimitzar-ho
@@ -175,7 +209,6 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             }
 
         }
-
         pub fn hasEdge(self: Self, from: T, to: T) bool {
             const from_node = self.nodes.get(from) orelse return false;
             for(from_node.edges_out.items) |edge| {
@@ -195,7 +228,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             return GraphError.EdgeNotFound;
         }
 
-        pub fn getEdgeIndex(self:Self, from: T, to: T) !usize {
+        fn getEdgeIndex(self:Self, from: T, to: T) !usize {
             const opt_from_node = self.nodes.get(from);
             if (opt_from_node) |*node| {
                 for(0..,node.*.edges_out.items) |i, edge| {
@@ -205,7 +238,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             return GraphError.EdgeNotFound;
         }
 
-        fn getNode(self: Self, value: T) !*Node {
+        pub fn getNode(self: Self, value: T) !*Node {
             const node_ptr: ?*Node = self.nodes.get(value);
             if (node_ptr) |node| {
                 return node;
@@ -214,6 +247,12 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         }
     };
 }
+
+
+// TODO: I think we should change the way we focus our test
+// and try to use the "zig" way. Take a look at how the std.ArrayList does the test.
+// Instead of focusing on cases, it focus on functions. From the basics to the most complex.
+// For example a test could be "Graph.init", or "Graph.newNode()".
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
