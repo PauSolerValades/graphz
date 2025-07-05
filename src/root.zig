@@ -27,11 +27,6 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         /// Check out below in the `Node` struct
         nodes: AutoHashMap(T, *Node),
         
-
-        // el chatty diu una cosa intel·ligent: lo de tenir els punters de edges guardat a dues llistes dona problemes al fer-los-hi
-        // free al deinit, si t'hi pares a pensar. És com que no queda clar qui té l'ownership dels punters. Ho podriem centralitzar
-        // tot en una arraylist aquí dalt per fer l'alliberament més fàcil i seguir també guardant els problemes allà.
-
         /// Structure definition of a `Node`. 
         const Node = struct {
             value: T,
@@ -109,24 +104,38 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             const node: *Node = try self.getNode(value);
             defer _ = self.nodes.remove(value); // delete from the dictionary
             
-            // Remove all edges that comes from this node
-            for (node.*.edges_out.items) |edge_ptr| {
-                // Delete the out edges and remove them
-                const to_value = edge_ptr.to.value;
-                try self.removeEdge(value, to_value); //TODO: HECTOOOOOR lo de reutilizar funcions està molt bé però això no és O(n^2)??? en plan, per això jo ho feia manipulant directalement, això és bonic però tremendament ineficient
+            // free all the memory of the edges of this node
+            for (node.*.edges_out.items) |edge_out_ptr| { 
+                const neighbour: *Node = edge_out_ptr.to;
+                for (0.., neighbour.*.edges_in.items) |i, nhbr_edge_in_ptr| {
+                    if (nhbr_edge_in_ptr == edge_out_ptr) {
+                        _ = neighbour.*.edges_in.swapRemove(i);
+                        break;
+                    }
+                }
             }
 
-            // Remove all edges that goes to this node
-            for (node.*.edges_in.items) |edge_ptr| {
-                const from_value = edge_ptr.from.value;
-
-                // Notice how now the `value` is in the `to` position
-                // when removing edges.
-                // We want to remove the edge that points towards this node.
-                try self.removeEdge(from_value, value); 
+            for (node.*.edges_in.items) |edge_in_ptr| { 
+                const neighbour: *Node = edge_in_ptr.from;
+                for (0.., neighbour.*.edges_out.items) |i, nhbr_edge_out_ptr| {
+                    if (nhbr_edge_out_ptr == edge_in_ptr) {
+                        _ = neighbour.*.edges_out.swapRemove(i);
+                        break;
+                    } 
+                }
+            }
+            
+            // free all the outwards edges memory 
+            for (node.edges_out.items) |edge_ptr| {
+                self.allocator.destroy(edge_ptr);
+            }
+            
+            // free all the inwards edges memory 
+            for (node.edges_in.items) |edge_ptr| {
+                self.allocator.destroy(edge_ptr);
             }
 
-            // delete the inner arraylist, with no elements 
+            // delete the inner arraylist with all the elements having beeing freed
             node.edges_in.deinit();
             node.edges_out.deinit();
             
@@ -157,7 +166,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
             // create requested edge with original direction
             const edge_ptr: *Edge = try self.allocator.create(Edge);
-
+            
             edge_ptr.* = .{
                 .from = from_node,
                 .to = to_node,
@@ -168,7 +177,6 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             try to_node.edges_in.append(edge_ptr);
         }
 
-        // TODO: fer l'arraylist amb cerca binària per optimitzar-ho
         pub fn removeEdge(self: *Self, from: T, to: T) !void {
             const from_node: *Node = try self.getNode(from); // Node where the Edge to remove is stored
             var edge_inout: ?*Edge = null;
@@ -186,7 +194,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             
             const to_node: *Node = try self.getNode(to); // Node where the Edge to remove is stored
             for (0.., to_node.*.edges_in.items) |idx, edge| {
-                // Let's remove only THE SAME edge in terms of reference.
+                // remove the same pointer to the edge
                 if (edge == edge_inout) {
                     edge_outin = to_node.*.edges_in.swapRemove(idx);
                     break;
@@ -238,22 +246,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
     };
 }
 
-
-// TODO: I think we should change the way we focus our test
-// and try to use the "zig" way. Take a look at how the std.ArrayList does the test.
-// Instead of focusing on cases, it focus on functions. From the basics to the most complex.
-// For example a test could be "Graph.init", or "Graph.newNode()".
-//
-//
-// like:
-// 1. init
-// 2. deinit
-// 3. addNode -> multiple instances checking if the node has actually appended. check the error
-// 4. addEdge -> check if actually the edge is correct. check the duplicate error
-// 5. hasEdge -> check if some are actually there. check the not found error
-// 6. removeNode -> check if all the edges and nodes are actually deleted
-// 7. removeEgde -> check if all the edges are deleted.
-
+// note: do not call deinit on the removeSmth tests, it will mask if the code
+// is working properly by deiniting all the graph
 const testing = std.testing;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
@@ -303,7 +297,7 @@ test "addNodes" {
     }
 }
 
-test "removeNodes" {
+test "removeNode" {
     {
         var graph = Graph(u32, f16).init(testing.allocator);
         defer graph.deinit();
@@ -336,6 +330,46 @@ test "removeNodes" {
             try graph.removeNode(i);
         }
     }
+    { // some edges when removing a node 
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+        try graph.newNode(2);
+        try graph.newNode(3);
+
+        try graph.newEdge(2,3, null);
+        try graph.newEdge(1,3, null);
+        try graph.newEdge(3,2, null);
+        try graph.newEdge(3,1, null);
+        try graph.newEdge(3,3, null);
+
+        try graph.newEdge(1,2, null);
+
+        try graph.removeNode(3);
+
+        try expect(graph.nodes.get(3) == null);
+        try expect(graph.nodes.count() == 2);
+
+        const node1 = try graph.getNode(1);
+        const node2 = try graph.getNode(2);
+        
+        // node1:  just one outgoing
+        try expect(node1.edges_out.items.len == 1);
+        try expect(node1.edges_in.items.len == 0);
+
+        // node2: just one ingoing
+        try expect(node2.edges_in.items.len == 1);
+        try expect(node2.edges_out.items.len == 0);
+
+        const edge_from_1 = node1.edges_out.items[0];
+        const edge_to_2 = node2.edges_in.items[0];
+
+        // both 1 and 2 should be the same edge 
+        try expect(edge_from_1 == edge_to_2);
+        try expect(edge_from_1.to == node2);
+        try expect(edge_from_1.from == node1);
+    }
 }
 
 test "newEdge" {
@@ -358,7 +392,7 @@ test "newEdge" {
         try expect(node2.?.edges_out.items.len == 0);
 
     }
-    { //from yourelf to yourself
+    { //from yourself to yourself
         const talloc = std.testing.allocator;
         var graph = Graph(u32, f16).init(talloc);
         defer graph.deinit();
@@ -408,6 +442,9 @@ test "removeEdge" {
         try expect(node1.?.edges_out.items.len == 0);
         try expect(node2.?.edges_in.items.len == 0);
         try expect(node2.?.edges_out.items.len == 0);
+
+        try graph.removeNode(1);
+        try graph.removeNode(2);
     }
     {
         const talloc = std.testing.allocator;
