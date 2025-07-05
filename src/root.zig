@@ -243,6 +243,35 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             }
             else return GraphError.NodeNotFound;
         }
+
+        /// Returns an slice with the values of the neighbors of the node
+        pub fn getNeighbors(self: Self, allocator: Allocator, value: T) ![]T {
+            const node_ptr = self.getNode(value);
+            const num_neighbors: usize = node_ptr.edges_out.items.len;
+            
+            const neighbors: []T = try allocator.alloc(T, num_neighbors);
+            
+            for (0.., node_ptr.edges_out.items) |i, edge_ptr| {
+                neighbors[i] = edge_ptr.to.value;
+            } 
+
+            return neighbors;
+        }
+       
+        /// Returns the value of all the neighbors, but a buffer must be
+        /// passed to retreive them
+        pub fn getNeighborsBuffer(self: Self, buffer: []T, value: T) ![]const T {
+            const node_ptr = self.getNode(value);
+            const num_neighbors: usize = node_ptr.edges_out.items.len;
+            
+            if (buffer.len < num_neighbors) return error.BufferToSmall;
+
+            for (0..num_neighbors) |i| {
+                buffer[i] = node_ptr.edges_out[i].to.value;
+            } 
+
+            return buffer[0..num_neighbors];
+        }
     };
 }
 
@@ -250,7 +279,6 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 // is working properly by deiniting all the graph
 const testing = std.testing;
 const expect = std.testing.expect;
-const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
 
 test "init" {
@@ -274,9 +302,9 @@ test "addNodes" {
 
         const node = graph.nodes.get(1);
         try expect(node != null);
-        try expectEqual(node.?.value, 1);
-        try expectEqual(node.?.edges_in.items.len, 0);
-        try expectEqual(node.?.edges_out.items.len, 0);
+        try expect(node.?.value == 1);
+        try expect(node.?.edges_in.items.len == 0);
+        try expect(node.?.edges_out.items.len == 0);
     }
     {
         const talloc = std.testing.allocator;
@@ -390,6 +418,14 @@ test "newEdge" {
         try expect(node1.?.edges_out.items.len == 1);
         try expect(node2.?.edges_in.items.len == 1);
         try expect(node2.?.edges_out.items.len == 0);
+        
+        const edge_from_1 = node1.?.edges_out.items[0];
+        const edge_to_2 = node2.?.edges_in.items[0];
+
+        try expect(edge_from_1 == edge_to_2);
+        try expect(edge_from_1.to == node2);
+        try expect(edge_from_1.from == node1);
+
 
     }
     { //from yourself to yourself
@@ -405,6 +441,13 @@ test "newEdge" {
 
         try expect(node1.?.edges_in.items.len == 1);
         try expect(node1.?.edges_out.items.len == 1);
+
+        const edge_from_1 = node1.?.edges_out.items[0];
+        const edge_to_1 = node1.?.edges_in.items[0];
+
+        try expect(edge_from_1 == edge_to_1);
+        try expect(edge_from_1.to == node1);
+        try expect(edge_from_1.from == node1);
     }
     { // non exising nodes -> node not found 
         const talloc = std.testing.allocator;
@@ -442,9 +485,6 @@ test "removeEdge" {
         try expect(node1.?.edges_out.items.len == 0);
         try expect(node2.?.edges_in.items.len == 0);
         try expect(node2.?.edges_out.items.len == 0);
-
-        try graph.removeNode(1);
-        try graph.removeNode(2);
     }
     {
         const talloc = std.testing.allocator;

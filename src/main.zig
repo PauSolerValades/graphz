@@ -11,13 +11,13 @@ pub fn main() !void {
 
     try graph.newEdge(2, 3, null);
 
-    std.debug.print("Edge 2->3 exists? --> {}\n", .{graph.hasEdge(2,3)});
+    std.debug.print("Edge 2->3 exists? --> {!}\n", .{graph.hasEdge(2,3)});
 
     try graph.removeEdge(2,3);
-    std.debug.print("Edge 2->3 exists? --> {}\n", .{graph.hasEdge(2,3)});
+    std.debug.print("Edge 2->3 exists? --> {!}\n", .{graph.hasEdge(2,3)});
 
     try graph.newEdge(2, 3, null);
-    std.debug.print("Edge 2->3 exists? --> {}\n", .{graph.hasEdge(2,3)});
+    std.debug.print("Edge 2->3 exists? --> {!}\n", .{graph.hasEdge(2,3)});
 
     try graph.removeNode(2);
     
