@@ -26,27 +26,25 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         /// has two lists: the edges coming from them and edges going towards them.
         /// Check out below in the `Node` struct
         nodes: AutoHashMap(T, *Node),
+        
+
+        // el chatty diu una cosa intel·ligent: lo de tenir els punters de edges guardat a dues llistes dona problemes al fer-los-hi
+        // free al deinit, si t'hi pares a pensar. És com que no queda clar qui té l'ownership dels punters. Ho podriem centralitzar
+        // tot en una arraylist aquí dalt per fer l'alliberament més fàcil i seguir també guardant els problemes allà.
 
         /// Structure definition of a `Node`. 
         const Node = struct {
             value: T,
-            /// Edges that comes from the actual node and goes to another node.
-            edges_out: std.ArrayListAligned(*Edge, null),
-
-            /// Edges that goes towards the actual node from any other node.
-            edges_in: std.ArrayListAligned(*Edge, null),
+            edges_out: std.ArrayListAligned(*Edge, null), // Edges that comes from the actual node and goes to another node.
+            edges_in: std.ArrayListAligned(*Edge, null), // Edges that goes towards the actual node from any other node.
         };
 
 
         /// Structure definition of an `Edge`.
         const Edge = struct {
-            /// The node where the edge is directed to.
-            to: *Node, 
-            /// The node where the edge comes from.
-            from: *Node, 
-            /// Weight parameters. The `type` is computed at compilation time.
-            /// It can be anything, and as such, it is also `Optional`
-            weight: ?W,
+            to: *Node, // The node where the edge is directed to.
+            from: *Node, // The node where the edge comes from.
+            weight: ?W, // Weight parameters. The `type` is computed at compilation time  It can be anything, and as such, it is also `Optional`
         };
 
         pub fn init(allocator: Allocator) Self {
@@ -62,6 +60,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
             //TODO: Idea -> Why dont we just call `removeNode()` and pass the Node value?
             // PAU: those are two get on the hash, i felt it was better to just remove it all
+            // no només felt better, cridar removeNode fa que això passi de O(n) a O(n*(hash access)). en canvi aquí no :(
             while (iterator.next()) |node| {
                 //const node = entry.value_ptr.*;
                 // TODO: no entenc perque això necessita 
@@ -91,15 +90,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
                 return GraphError.RepeatedNodeInsertion;
             } 
             const node_ptr: *Node = try self.allocator.create(Node);
-            
-            // manage some allocator fail state freeing all available memory 
-            // TODO: Why do you need to this? If the allocation fails why do we deinit the arraylist if they have not been allocated?
-            // PAU: I think it's more of a: imagine we allocate the first list but not the second stuff?
-            errdefer {
-                node_ptr.edges_in.deinit();
-                node_ptr.edges_out.deinit();
-                self.allocator.destroy(node_ptr); 
-            }
+            errdefer self.allocator.destroy(node_ptr); 
             
             node_ptr.* = .{ 
                 .value = value, 
@@ -107,7 +98,12 @@ pub fn Graph(comptime T: type, comptime W: type) type {
                 .edges_out = try ArrayList(*Edge).initCapacity(self.allocator, CAPACITY),
             };
             
-            try self.nodes.put(value, node_ptr);
+            // if the value cannot be written, free the empty ArrayLists
+            self.nodes.put(value, node_ptr) catch |err| {
+                node_ptr.edges_in.deinit();
+                node_ptr.edges_out.deinit();
+                return err;
+            };
 
         }
        
@@ -120,12 +116,11 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             const node: *Node = try self.getNode(value);
             defer _ = self.nodes.remove(value); // delete from the dictionary
             
-
             // Remove all edges that comes from this node
             for (node.*.edges_out.items) |edge_ptr| {
                 // Delete the out edges and remove them
                 const to_value = edge_ptr.to.value;
-                try self.removeEdge(value, to_value);
+                try self.removeEdge(value, to_value); //TODO: HECTOOOOOR lo de reutilizar funcions està molt bé però això no és O(n^2)??? en plan, per això jo ho feia manipulant directalement, això és bonic però tremendament ineficient
             }
 
             // Remove all edges that goes to this node
@@ -161,7 +156,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             var to_node = try self.getNode(to);
 
             // we check for the same edge in both nodes
-            if (self.hasEdge(from, to))  {
+            const has_edge: bool = try self.hasEdge(from,to);
+            if (has_edge)  {
                 std.debug.print("The edge {any}->{any} is already in the graph\n", .{from, to});
                 return GraphError.RepeatedEdgeInsertion;
             } 
@@ -210,8 +206,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
         }
 
-        pub fn hasEdge(self: Self, from: T, to: T) bool {
-            const from_node = self.nodes.get(from) orelse return false;
+        pub fn hasEdge(self: Self, from: T, to: T) !bool {
+            const from_node = try self.getNode(from);
             for(from_node.edges_out.items) |edge| {
                 if (edge.to.value == to) return true;
             }
@@ -220,7 +216,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         }
 
         pub fn getEdge(self:Self, from: T, to: T) !*Edge {
-            const opt_from_node = self.nodes.get(from);
+            const opt_from_node = self.getNode(from);
             if (opt_from_node) |*node| {
                 for(node.*.edges_out.items) |edge| {
                     if (edge.to.value == to) return edge;
@@ -230,7 +226,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         }
 
         fn getEdgeIndex(self:Self, from: T, to: T) !usize {
-            const opt_from_node = self.nodes.get(from);
+            const opt_from_node = self.getNode(from);
             if (opt_from_node) |*node| {
                 for(0..,node.*.edges_out.items) |i, edge| {
                     if (edge.to.value == to) return i;
@@ -239,7 +235,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             return GraphError.EdgeNotFound;
         }
 
-        pub fn getNode(self: Self, value: T) !*Node {
+        fn getNode(self: Self, value: T) !*Node {
             const node_ptr: ?*Node = self.nodes.get(value);
             if (node_ptr) |node| {
                 return node;
@@ -255,7 +251,6 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 // Instead of focusing on cases, it focus on functions. From the basics to the most complex.
 // For example a test could be "Graph.init", or "Graph.newNode()".
 //
-// PAU: yeah sure :)
 //
 // like:
 // 1. init
@@ -271,13 +266,13 @@ const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
 
-test "init" = {
+test "init" {
     {
         var graph = Graph(u32, f16).init(std.testing.allocator);
         defer graph.deinit();
 
         // list should be at zero capacity
-        try expect(graph.nodes.count == 0); 
+        try expect(graph.nodes.count() == 0); 
     }
 
 }
@@ -324,7 +319,7 @@ test "removeNodes" {
 
         const node = graph.nodes.get(1);
         try expect(node == null);
-        try expect(graph.nodes.count == 0);
+        try expect(graph.nodes.count() == 0);
     }
     {
         const talloc = std.testing.allocator;
@@ -332,7 +327,7 @@ test "removeNodes" {
         defer graph.deinit();
 
         try expectError(GraphError.NodeNotFound, graph.newNode(1));
-        try expect(graph.nodes.count == 0);
+        try expect(graph.nodes.count() == 0);
     }
     {
         var graph = Graph(u32, f16).init(testing.allocator);
@@ -382,13 +377,15 @@ test "newEdge" {
         try expect(node1.?.edges_in.items.len == 1);
         try expect(node1.?.edges_out.items.len == 1);
     }
-    { // non exising nodes -> node not found OJU QUE AIXÒ NO VA
+    { // non exising nodes -> node not found 
         const talloc = std.testing.allocator;
         var graph = Graph(u32, f16).init(talloc);
         defer graph.deinit();
 
         try graph.newNode(1);
         try graph.newNode(2);
+
+        const node1 = graph.nodes.get(1);
 
         try expectError(GraphError.NodeNotFound, graph.newEdge(1,3,null));
         try expect(node1.?.edges_in.items.len == 0);
@@ -398,14 +395,89 @@ test "newEdge" {
 }
 
 test "removeEdge" {
-    // remove the edge: check it's not in any node arraylist
-    // remove a non existing edge: check it's gone in all the arraylists
+    { // remove a normal edge
+        const talloc = std.testing.allocator;
+        var graph = Graph(u32, f16).init(talloc);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+        try graph.newNode(2);
+        try graph.newEdge(1,2,null);
+        
+        try graph.removeEdge(1,2);
+        
+        const node1 = graph.nodes.get(1);
+        const node2 = graph.nodes.get(2);
+        
+        try expect(node1.?.edges_in.items.len == 0);
+        try expect(node1.?.edges_out.items.len == 0);
+        try expect(node2.?.edges_in.items.len == 0);
+        try expect(node2.?.edges_out.items.len == 0);
+    }
+    {
+        const talloc = std.testing.allocator;
+        var graph = Graph(u32, f16).init(talloc);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+
+        try graph.newEdge(1,1,null);
+        try graph.removeEdge(1,1);
+
+        const node1 = graph.nodes.get(1);
+        
+        try expect(node1.?.edges_in.items.len == 0);
+        try expect(node1.?.edges_out.items.len == 0);
+    }
+    { // remove an Edge with a non existing node 
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
+
+        try expectError(GraphError.NodeNotFound, graph.removeEdge(1,2));
+    }
+    { // remove an non existing edge
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
+        
+        try graph.newNode(1);
+        try graph.newNode(2);
+        
+        try expectError(GraphError.EdgeNotFound, graph.removeEdge(1,2));
+    }
 }
 
 test "hasEdge" {
-    // edge in the graph -> true
-    // edge not in the graph -> false
-    // node of one of the edges not in the graph -> error
+    { 
+        const talloc = std.testing.allocator;
+        var graph = Graph(u32, f16).init(talloc);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+        try graph.newNode(2);
+        try graph.newEdge(1,2,null);
+        
+        const b = try graph.hasEdge(1,2); 
+        try expect(b);
+        
+    }
+    {
+        const talloc = std.testing.allocator;
+        var graph = Graph(u32, f16).init(talloc);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+        try graph.newNode(2);
+        try graph.newEdge(2,1,null);
+       
+        const b = try graph.hasEdge(1,2); 
+        try expect(!b);
+    }
+    { // remove an Edge with a non existing node 
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
+    
+        try expectError(GraphError.NodeNotFound, graph.hasEdge(1,2));
+    }
 }
 
 test "Graph: complete two node graph" {
@@ -434,39 +506,6 @@ test "Graph: auto-complete two node graph" {
     try graph.newEdge(2,2, null);
 }
 
-test "Graph: delete edge two node graph" {
-    const talloc = std.testing.allocator;
-    var graph = Graph(u32, f16).init(talloc);
-    defer graph.deinit();
-
-    try graph.newNode(1);
-    try graph.newNode(2);
-
-    try graph.newEdge(1,1,null);
-    try graph.newEdge(2,2,null);
-    try graph.newEdge(2,1,null);
-    try graph.newEdge(1,2,null);
-    
-    try expect(graph.hasEdge(1,1));
-    try expect(graph.hasEdge(2,2));
-    try expect(graph.hasEdge(2,1));
-    try expect(graph.hasEdge(1,2));
-
-    try graph.removeEdge(2,1);
-
-    try expect(graph.hasEdge(1,1));
-    try expect(graph.hasEdge(2,2));
-    try expect(!graph.hasEdge(2,1));
-    try expect(graph.hasEdge(1,2));
-
-    try graph.removeEdge(2,2);
-
-    try expect(graph.hasEdge(1,1));
-    try expect(!graph.hasEdge(2,2));
-    try expect(!graph.hasEdge(2,1));
-    try expect(graph.hasEdge(1,2));
-}
-
 // aquest test no va lmao!
 test "Graph: delete edges associated to a node" {
      const talloc = std.testing.allocator;
@@ -485,11 +524,11 @@ test "Graph: delete edges associated to a node" {
 
     try expectEqual(graph.nodes.get(1).?.edges_in.items.len, 1);
     try expectEqual(graph.nodes.get(1).?.edges_out.items.len, 1);
-    try expect(!graph.hasEdge(1, 2));
-    try expect(!graph.hasEdge(2, 1));
-    try expect(!graph.hasEdge(2, 2));
+    try expect(!try graph.hasEdge(1, 2));
+    try expect(!try graph.hasEdge(2, 1));
+    try expect(!try graph.hasEdge(2, 2));
 
-    try expect(graph.hasEdge(1, 1));
+    try expect(try graph.hasEdge(1, 1));
 }
 
 test "Graph: 10-node autocomplete graph" {
@@ -511,8 +550,3 @@ test "Graph: 10-node autocomplete graph" {
     }   
 } 
 
-//TODO: missing tests:
-// 1. errors: duplicated nodes, duplicated edges
-// 2. errors: node and edge not found on removal
-// 3. node removal with existing edges (kinda done but does not work)
-// 4.
