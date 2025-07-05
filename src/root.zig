@@ -552,4 +552,17 @@ test "hasEdge" {
     }
 }
 
+test "getNeighbors" {
+    // normal:
+    // empty -> 1: no neighbors, just in edged
+    // error: node not found again because can happen
+}
+
+test "getNeighbotsBuffer" {
+    // normal:
+    // empty -> 1: no neighbors, just in edged
+    // error: node not found again because can happen
+    // buffer too small
+
+}
 
