@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
 const HashMap = std.HashMap;
-const CAPACITY = 64;
 
 pub const GraphError = error {
     NodeNotFound,
@@ -11,6 +10,7 @@ pub const GraphError = error {
     RepeatedNodeInsertion,
     RepeatedEdgeInsertion,
 };
+
 /// Graph implemenation in Zig that gives you the functionality
 /// to do anything you'd like to do with a graph.
 pub fn Graph(comptime T: type, comptime W: type) type {
@@ -52,24 +52,12 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         pub fn deinit(self: *Self) void {
             var iterator = self.nodes.valueIterator();
 
-
-            //TODO: Idea -> Why dont we just call `removeNode()` and pass the Node value?
-            // PAU: those are two get on the hash, i felt it was better to just remove it all
-            // no només felt better, cridar removeNode fa que això passi de O(n) a O(n*(hash access)). en canvi aquí no :(
             while (iterator.next()) |node| {
-                //const node = entry.value_ptr.*;
-                // TODO: no entenc perque això necessita 
-                // la derreferència explícita, però això
-                // passa tots els test, no memory leak
+                
                 for (node.*.edges_in.items) |edge_ptr| {
                     self.allocator.destroy(edge_ptr);
                 } 
-                
-                // oju! si poses això estàs doble freeing!
-                //for (node.*.edges_out.items) |edge_ptr| {
-                //    self.allocator.destroy(edge_ptr);
-                //}
-
+                // remember, free always from edges_in
                 node.*.edges_in.deinit();
                 node.*.edges_out.deinit();
                 self.allocator.destroy(node.*);
@@ -78,6 +66,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             self.nodes.deinit();
         }
         
+        /// Adds a node to the graph with a certain value 
         pub fn newNode(self: *Self, value: T) !void {
             
             if(self.nodes.contains(value)) {
@@ -88,8 +77,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             
             node_ptr.* = .{ 
                 .value = value, 
-                .edges_in = try ArrayList(*Edge).initCapacity(self.allocator, CAPACITY), 
-                .edges_out = try ArrayList(*Edge).initCapacity(self.allocator, CAPACITY),
+                .edges_in = ArrayList(*Edge).init(self.allocator), 
+                .edges_out = ArrayList(*Edge).init(self.allocator),
             };
             
             try self.nodes.put(value, node_ptr); 
@@ -166,7 +155,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             try from_node.edges_out.append(edge_ptr);
             try to_node.edges_in.append(edge_ptr);
         }
-
+        
+        // techincally the removeEdge test are valid for this function
         fn removeEdgeFromNodes(self: *Self, from_node: *Node, to_node: *Node) !void {
             var edge_inout: ?*Edge = null;
             var edge_outin: ?*Edge = null;
@@ -192,13 +182,17 @@ pub fn Graph(comptime T: type, comptime W: type) type {
                 self.allocator.destroy(edge_outin.?);
             }
         }
-
+        
+        /// Removes the edge from from to to node
+        /// If one of the nodes does not exist, an error
+        /// NodeNotFound is raised.
         pub fn removeEdge(self: *Self, from: T, to: T) !void {
             const from_node: *Node = try self.getNode(from); // Node where the Edge to remove is stored
             const to_node: *Node = try self.getNode(to); // Node where the Edge to remove is stored
             try self.removeEdgeFromNodes(from_node, to_node);
         }
-
+        
+        // does not have test
         pub fn hasEdge(self: Self, from: T, to: T) !bool {
             const from_node = try self.getNode(from);
             for(from_node.edges_out.items) |edge| {
@@ -207,7 +201,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
             return false;
         }
-
+        
+        // does not have tests
         pub fn getEdge(self:Self, from: T, to: T) !*Edge {
             const opt_from_node = self.getNode(from);
             if (opt_from_node) |*node| {
@@ -217,7 +212,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             } 
             return GraphError.EdgeNotFound;
         }
-
+        
+        // does not have tests
         fn getEdgeIndex(self:Self, from: T, to: T) !usize {
             const opt_from_node = self.getNode(from);
             if (opt_from_node) |*node| {
@@ -227,7 +223,8 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             } 
             return GraphError.EdgeNotFound;
         }
-
+        
+        // does not have test
         fn getNode(self: Self, value: T) !*Node {
             const node_ptr: ?*Node = self.nodes.get(value);
             if (node_ptr) |node| {
@@ -238,7 +235,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
         /// Returns an slice with the values of the neighbors of the node
         pub fn getNeighbors(self: Self, allocator: Allocator, value: T) ![]T {
-            const node_ptr = self.getNode(value);
+            const node_ptr = try self.getNode(value);
             const num_neighbors: usize = node_ptr.edges_out.items.len;
             
             const neighbors: []T = try allocator.alloc(T, num_neighbors);
@@ -252,14 +249,14 @@ pub fn Graph(comptime T: type, comptime W: type) type {
        
         /// Returns the value of all the neighbors, but a buffer must be
         /// passed to retreive them
-        pub fn getNeighborsBuffer(self: Self, buffer: []T, value: T) ![]const T {
-            const node_ptr = self.getNode(value);
+        pub fn getNeighborsBuffer(self: Self, buffer: []T, value: T) ![]T {
+            const node_ptr = try self.getNode(value);
             const num_neighbors: usize = node_ptr.edges_out.items.len;
             
             if (buffer.len < num_neighbors) return error.BufferToSmall;
 
             for (0..num_neighbors) |i| {
-                buffer[i] = node_ptr.edges_out[i].to.value;
+                buffer[i] = node_ptr.edges_out.items[i].to.value;
             } 
 
             return buffer[0..num_neighbors];
@@ -267,11 +264,10 @@ pub fn Graph(comptime T: type, comptime W: type) type {
     };
 }
 
-// note: do not call deinit on the removeSmth tests, it will mask if the code
-// is working properly by deiniting all the graph
 const testing = std.testing;
 const expect = std.testing.expect;
 const expectError = std.testing.expectError;
+const expectEqualSlices = std.testing.expectEqualSlices;
 
 test "init" {
     {
@@ -455,7 +451,6 @@ test "newEdge" {
         try expect(node1.?.edges_in.items.len == 0);
         try expect(node1.?.edges_out.items.len == 0);
     }
- 
 }
 
 test "removeEdge" {
@@ -545,16 +540,108 @@ test "hasEdge" {
 }
 
 test "getNeighbors" {
-    // normal:
-    // empty -> 1: no neighbors, just in edged
-    // error: node not found again because can happen
+    {
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+        try graph.newNode(2);
+        try graph.newNode(3);
+        
+        try graph.newEdge(1,2, null);
+        try graph.newEdge(1,3, null);
+        
+        try graph.newEdge(2,1, null);
+
+        const n1 = try graph.getNeighbors(testing.allocator, 1);
+        const n2 = try graph.getNeighbors(testing.allocator, 2);
+
+        try expectEqualSlices(u32, n1, &[_]u32{2,3});
+        try expectEqualSlices(u32, n2, &[_]u32{1});
+
+        testing.allocator.free(n1);
+        testing.allocator.free(n2);
+    } 
+    {
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+        
+        const n1 = try graph.getNeighbors(testing.allocator, 1);
+        try expectEqualSlices(u32, n1, &[_]u32{});
+
+    }
+    {
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
+        
+        try expectError(GraphError.NodeNotFound, graph.getNeighbors(testing.allocator, 1));
+
+    }    
 }
 
 test "getNeighbotsBuffer" {
-    // normal:
-    // empty -> 1: no neighbors, just in edged
-    // error: node not found again because can happen
-    // buffer too small
+     {
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
 
+        try graph.newNode(1);
+        try graph.newNode(2);
+        try graph.newNode(3);
+        
+        try graph.newEdge(1,2, null);
+        try graph.newEdge(1,3, null);
+        
+        try graph.newEdge(2,1, null);
+        
+        var buffer: [10]u32 = undefined;
+
+        const n1 = try graph.getNeighborsBuffer(&buffer, 1);
+        try expectEqualSlices(u32, n1, &[_]u32{2,3});
+       
+        buffer[0] = undefined;
+        buffer[1] = undefined;
+
+        const n2 = try graph.getNeighborsBuffer(&buffer, 2);
+        try expectEqualSlices(u32, n2, &[_]u32{1});
+    
+    } 
+    {
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
+
+        try graph.newNode(1);
+        var buffer: [10]u32 = undefined;
+
+        const n1 = try graph.getNeighborsBuffer(&buffer, 1);
+        try expectEqualSlices(u32, n1, &[_]u32{});
+
+    }
+    {
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
+        
+        var buffer: [10]u32 = undefined;
+        try expectError(GraphError.NodeNotFound, graph.getNeighborsBuffer(&buffer, 1));
+
+    }
+    {
+        var graph = Graph(u32, f16).init(testing.allocator);
+        defer graph.deinit();
+
+        var buffer: [8]u32 = undefined;
+                
+        const nodes = [_]u32{1,2,3,4,5,6,7,8,9,0};
+        for (nodes) |i| {
+            try graph.newNode(i);
+        }
+
+        for (nodes) |i| {
+            try graph.newEdge(1,i, null);
+        }
+
+        try expectError(error.BufferToSmall, graph.getNeighborsBuffer(&buffer, 1));
+    }
 }
 
