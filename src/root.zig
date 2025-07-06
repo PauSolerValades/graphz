@@ -106,23 +106,13 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             
             // free all the memory of the edges of this node
             for (node.*.edges_out.items) |edge_out_ptr| { 
-                const neighbour: *Node = edge_out_ptr.to;
-                for (0.., neighbour.*.edges_in.items) |i, nhbr_edge_in_ptr| {
-                    if (nhbr_edge_in_ptr == edge_out_ptr) {
-                        _ = neighbour.*.edges_in.swapRemove(i);
-                        break;
-                    }
-                }
+                const to_node = edge_out_ptr.to;
+                try self.removeEdgeFromNodes(node, to_node);
             }
 
             for (node.*.edges_in.items) |edge_in_ptr| { 
-                const neighbour: *Node = edge_in_ptr.from;
-                for (0.., neighbour.*.edges_out.items) |i, nhbr_edge_out_ptr| {
-                    if (nhbr_edge_out_ptr == edge_in_ptr) {
-                        _ = neighbour.*.edges_out.swapRemove(i);
-                        break;
-                    } 
-                }
+                const from_node = edge_in_ptr.from;
+                try self.removeEdgeFromNodes(from_node, node);
             }
             
             // free all the outwards edges memory 
@@ -177,13 +167,11 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             try to_node.edges_in.append(edge_ptr);
         }
 
-        pub fn removeEdge(self: *Self, from: T, to: T) !void {
-            const from_node: *Node = try self.getNode(from); // Node where the Edge to remove is stored
+        fn removeEdgeFromNodes(self: *Self, from_node: *Node, to_node: *Node) !void {
             var edge_inout: ?*Edge = null;
             var edge_outin: ?*Edge = null;
-
             for (0.., from_node.*.edges_out.items) |idx, edge| {
-                if (edge.to.value == to) {
+                if (edge.to.value == to_node.value) {
                     edge_inout = from_node.*.edges_out.swapRemove(idx);
                     break;
                 }
@@ -192,7 +180,6 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             // if edge is not in from->to, then it is not in the to->from 
             if (edge_inout == null) return GraphError.EdgeNotFound;
             
-            const to_node: *Node = try self.getNode(to); // Node where the Edge to remove is stored
             for (0.., to_node.*.edges_in.items) |idx, edge| {
                 // remove the same pointer to the edge
                 if (edge == edge_inout) {
@@ -204,7 +191,12 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             if (edge_outin == edge_inout) {
                 self.allocator.destroy(edge_outin.?);
             }
+        }
 
+        pub fn removeEdge(self: *Self, from: T, to: T) !void {
+            const from_node: *Node = try self.getNode(from); // Node where the Edge to remove is stored
+            const to_node: *Node = try self.getNode(to); // Node where the Edge to remove is stored
+            try self.removeEdgeFromNodes(from_node, to_node);
         }
 
         pub fn hasEdge(self: Self, from: T, to: T) !bool {
