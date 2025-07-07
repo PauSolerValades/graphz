@@ -13,7 +13,7 @@ pub const GraphError = error {
 
 /// Graph implemenation in Zig that gives you the functionality
 /// to do anything you'd like to do with a graph.
-pub fn Graph(comptime T: type, comptime W: type) type {
+pub fn Graph(comptime T: type, comptime N: type, comptime S: type) type {
 
     return struct {
         const Self = @This();
@@ -30,6 +30,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         /// Structure definition of a `Node`. 
         const Node = struct {
             value: T,
+            payload: ?N,
             edges_out: std.ArrayListAligned(*Edge, null), // Edges that comes from the actual node and goes to another node.
             edges_in: std.ArrayListAligned(*Edge, null), // Edges that goes towards the actual node from any other node.
         };
@@ -39,7 +40,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         const Edge = struct {
             to: *Node, // The node where the edge is directed to.
             from: *Node, // The node where the edge comes from.
-            weight: ?W, // Weight parameters. The `type` is computed at compilation time  It can be anything, and as such, it is also `Optional`
+            payload: ?S, // Weight parameters. The `type` is computed at compilation time  It can be anything, and as such, it is also `Optional`
         };
 
         pub fn init(allocator: Allocator) Self {
@@ -54,10 +55,10 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
             while (iterator.next()) |node| {
                 
-                for (node.*.edges_in.items) |edge_ptr| {
+                for (node.*.edges_out.items) |edge_ptr| {
                     self.allocator.destroy(edge_ptr);
                 } 
-                // remember, free always from edges_in
+                // remember, free always from edges_out
                 node.*.edges_in.deinit();
                 node.*.edges_out.deinit();
                 self.allocator.destroy(node.*);
@@ -67,7 +68,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         }
         
         /// Adds a node to the graph with a certain value 
-        pub fn newNode(self: *Self, value: T) !void {
+        pub fn newNode(self: *Self, value: T, payload: ?N) !void {
             
             if(self.nodes.contains(value)) {
                 std.debug.print("No repeated values are allowed\n", .{});
@@ -79,6 +80,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
                 .value = value, 
                 .edges_in = ArrayList(*Edge).init(self.allocator), 
                 .edges_out = ArrayList(*Edge).init(self.allocator),
+                .payload = payload,
             };
             
             try self.nodes.put(value, node_ptr); 
@@ -89,7 +91,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         /// Node, either if they come from the Node or goes towards the Node.
         ///
         /// It checks the Node with value `value` exists.
-        pub fn removeNode(self: *Self, value: T) !void {
+        pub fn removeNode(self: *Self, value: T) !?N {
             const node: *Node = try self.getNode(value);
             defer _ = self.nodes.remove(value); // delete from the dictionary
             
@@ -118,8 +120,11 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             node.edges_in.deinit();
             node.edges_out.deinit();
             
+            const payload_ptr: ?N = node.payload; 
             // delete the node
             self.allocator.destroy(node);
+            
+            return payload_ptr;
 
         }
 
@@ -132,7 +137,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         ///     - Adds it in the `edges_out` of the Node with value `from`.
         ///     - Adds it in the `edges_in` of the Node with value `to`.
         /// The edge is the same for both Nodes, it has the same reference.
-        pub fn newEdge(self: *Self, from: T, to: T, weight: ?W) !void {
+        pub fn newEdge(self: *Self, from: T, to: T, payload: ?S) !void {
             var from_node = try self.getNode(from);
             var to_node = try self.getNode(to);
 
@@ -149,7 +154,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
             edge_ptr.* = .{
                 .from = from_node,
                 .to = to_node,
-                .weight = weight,
+                .payload = payload,
             };
 
             try from_node.edges_out.append(edge_ptr);
@@ -226,11 +231,7 @@ pub fn Graph(comptime T: type, comptime W: type) type {
         
         // does not have test
         fn getNode(self: Self, value: T) !*Node {
-            const node_ptr: ?*Node = self.nodes.get(value);
-            if (node_ptr) |node| {
-                return node;
-            }
-            else return GraphError.NodeNotFound;
+            return self.nodes.get(value) orelse GraphError.NodeNotFound; 
         }
 
         /// Returns an slice with the values of the neighbors of the node
@@ -261,6 +262,16 @@ pub fn Graph(comptime T: type, comptime W: type) type {
 
             return buffer[0..num_neighbors];
         }
+
+        pub fn getNodePayload(self: Self, value: T) !*N {
+            const node: *Node = try self.getNode(value);
+            return &node.payload;    
+        }
+
+        pub fn getEdgePayload(self: Self, from: T, to: T) !*S {
+            const edge: *Edge = try self.getEdge(from, to);
+            return &edge.payload;
+        }
     };
 }
 
@@ -271,7 +282,7 @@ const expectEqualSlices = std.testing.expectEqualSlices;
 
 test "init" {
     {
-        var graph = Graph(u32, f16).init(std.testing.allocator);
+        var graph = Graph(u32, void, void).init(std.testing.allocator);
         defer graph.deinit();
 
         // list should be at zero capacity
@@ -283,10 +294,10 @@ test "init" {
 test "addNodes" {
     {
         const talloc = std.testing.allocator;
-        var graph = Graph(u32, f16).init(talloc);
+        var graph = Graph(u32, void, void).init(talloc);
         defer graph.deinit();
 
-        try graph.newNode(1);
+        try graph.newNode(1, null);
 
         const node = graph.nodes.get(1);
         try expect(node != null);
@@ -296,30 +307,30 @@ test "addNodes" {
     }
     {
         const talloc = std.testing.allocator;
-        var graph = Graph(u32, f16).init(talloc);
+        var graph = Graph(u32, void, void).init(talloc);
         defer graph.deinit();
 
-        try graph.newNode(1);
-        try expectError(GraphError.RepeatedNodeInsertion, graph.newNode(1));
+        try graph.newNode(1, null);
+        try expectError(GraphError.RepeatedNodeInsertion, graph.newNode(1, null));
     }
     {   // insert lots of nodes
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit(); 
         const nodes = [_]u32{1,2,3,4,5,6,7,8,9,0};
         
         for (nodes) |i| {
-            try graph.newNode(i);
+            try graph.newNode(i, null);
         }
     }
 }
 
 test "removeNode" {
     {
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
 
-        try graph.newNode(1);
-        try graph.removeNode(1);
+        try graph.newNode(1, null);
+        _ = try graph.removeNode(1);
 
         const node = graph.nodes.get(1);
         try expect(node == null);
@@ -327,32 +338,32 @@ test "removeNode" {
     }
     {
         const talloc = std.testing.allocator;
-        var graph = Graph(u32, f16).init(talloc);
+        var graph = Graph(u32, void, void).init(talloc);
         defer graph.deinit();
 
         try expectError(GraphError.NodeNotFound, graph.removeNode(1));
         try expect(graph.nodes.count() == 0);
     }
     {
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit(); 
         const nodes = [_]u32{1,2,3,4,5,6,7,8,9,0};
 
         for (nodes) |i| {
-            try graph.newNode(i);
+            try graph.newNode(i, null);
         }
 
         for (nodes) |i| {
-            try graph.removeNode(i);
+            _ = try graph.removeNode(i);
         }
     }
     { // some edges when removing a node 
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
 
-        try graph.newNode(1);
-        try graph.newNode(2);
-        try graph.newNode(3);
+        try graph.newNode(1, null);
+        try graph.newNode(2, null);
+        try graph.newNode(3, null);
 
         try graph.newEdge(2,3, null);
         try graph.newEdge(1,3, null);
@@ -362,7 +373,7 @@ test "removeNode" {
 
         try graph.newEdge(1,2, null);
 
-        try graph.removeNode(3);
+        _ = try graph.removeNode(3);
 
         try expect(graph.nodes.get(3) == null);
         try expect(graph.nodes.count() == 2);
@@ -391,11 +402,11 @@ test "removeNode" {
 test "newEdge" {
     {
         const talloc = std.testing.allocator;
-        var graph = Graph(u32, f16).init(talloc);
+        var graph = Graph(u32, void, void).init(talloc);
         defer graph.deinit();
 
-        try graph.newNode(1);
-        try graph.newNode(2);
+        try graph.newNode(1, null);
+        try graph.newNode(2, null);
 
         try graph.newEdge(1,2,null);
         
@@ -418,10 +429,10 @@ test "newEdge" {
     }
     { //from yourself to yourself
         const talloc = std.testing.allocator;
-        var graph = Graph(u32, f16).init(talloc);
+        var graph = Graph(u32, void, void).init(talloc);
         defer graph.deinit();
 
-        try graph.newNode(1);
+        try graph.newNode(1, null);
 
         try graph.newEdge(1,1,null);
         
@@ -439,11 +450,11 @@ test "newEdge" {
     }
     { // non exising nodes -> node not found 
         const talloc = std.testing.allocator;
-        var graph = Graph(u32, f16).init(talloc);
+        var graph = Graph(u32, void, void).init(talloc);
         defer graph.deinit();
 
-        try graph.newNode(1);
-        try graph.newNode(2);
+        try graph.newNode(1, null);
+        try graph.newNode(2, null);
 
         const node1 = graph.nodes.get(1);
 
@@ -456,11 +467,11 @@ test "newEdge" {
 test "removeEdge" {
     { // remove a normal edge
         const talloc = std.testing.allocator;
-        var graph = Graph(u32, f16).init(talloc);
+        var graph = Graph(u32, void, void).init(talloc);
         defer graph.deinit();
 
-        try graph.newNode(1);
-        try graph.newNode(2);
+        try graph.newNode(1, null);
+        try graph.newNode(2, null);
         try graph.newEdge(1,2,null);
         
         try graph.removeEdge(1,2);
@@ -475,10 +486,10 @@ test "removeEdge" {
     }
     {
         const talloc = std.testing.allocator;
-        var graph = Graph(u32, f16).init(talloc);
+        var graph = Graph(u32, void, void).init(talloc);
         defer graph.deinit();
 
-        try graph.newNode(1);
+        try graph.newNode(1, null);
 
         try graph.newEdge(1,1,null);
         try graph.removeEdge(1,1);
@@ -489,17 +500,17 @@ test "removeEdge" {
         try expect(node1.?.edges_out.items.len == 0);
     }
     { // remove an Edge with a non existing node 
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
 
         try expectError(GraphError.NodeNotFound, graph.removeEdge(1,2));
     }
     { // remove an non existing edge
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
         
-        try graph.newNode(1);
-        try graph.newNode(2);
+        try graph.newNode(1, null);
+        try graph.newNode(2, null);
         
         try expectError(GraphError.EdgeNotFound, graph.removeEdge(1,2));
     }
@@ -508,11 +519,11 @@ test "removeEdge" {
 test "hasEdge" {
     { 
         const talloc = std.testing.allocator;
-        var graph = Graph(u32, f16).init(talloc);
+        var graph = Graph(u32, void, void).init(talloc);
         defer graph.deinit();
 
-        try graph.newNode(1);
-        try graph.newNode(2);
+        try graph.newNode(1, null);
+        try graph.newNode(2, null);
         try graph.newEdge(1,2,null);
         
         const b = try graph.hasEdge(1,2); 
@@ -521,18 +532,18 @@ test "hasEdge" {
     }
     {
         const talloc = std.testing.allocator;
-        var graph = Graph(u32, f16).init(talloc);
+        var graph = Graph(u32, void, void).init(talloc);
         defer graph.deinit();
 
-        try graph.newNode(1);
-        try graph.newNode(2);
+        try graph.newNode(1, null);
+        try graph.newNode(2, null);
         try graph.newEdge(2,1,null);
        
         const b = try graph.hasEdge(1,2); 
         try expect(!b);
     }
     { // remove an Edge with a non existing node 
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
     
         try expectError(GraphError.NodeNotFound, graph.hasEdge(1,2));
@@ -541,12 +552,12 @@ test "hasEdge" {
 
 test "getNeighbors" {
     {
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
 
-        try graph.newNode(1);
-        try graph.newNode(2);
-        try graph.newNode(3);
+        try graph.newNode(1, null);
+        try graph.newNode(2, null);
+        try graph.newNode(3, null);
         
         try graph.newEdge(1,2, null);
         try graph.newEdge(1,3, null);
@@ -563,17 +574,17 @@ test "getNeighbors" {
         testing.allocator.free(n2);
     } 
     {
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
 
-        try graph.newNode(1);
+        try graph.newNode(1, null);
         
         const n1 = try graph.getNeighbors(testing.allocator, 1);
         try expectEqualSlices(u32, n1, &[_]u32{});
 
     }
     {
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
         
         try expectError(GraphError.NodeNotFound, graph.getNeighbors(testing.allocator, 1));
@@ -583,12 +594,12 @@ test "getNeighbors" {
 
 test "getNeighbotsBuffer" {
      {
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
 
-        try graph.newNode(1);
-        try graph.newNode(2);
-        try graph.newNode(3);
+        try graph.newNode(1, null);
+        try graph.newNode(2, null);
+        try graph.newNode(3, null);
         
         try graph.newEdge(1,2, null);
         try graph.newEdge(1,3, null);
@@ -608,10 +619,10 @@ test "getNeighbotsBuffer" {
     
     } 
     {
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
 
-        try graph.newNode(1);
+        try graph.newNode(1, null);
         var buffer: [10]u32 = undefined;
 
         const n1 = try graph.getNeighborsBuffer(&buffer, 1);
@@ -619,7 +630,7 @@ test "getNeighbotsBuffer" {
 
     }
     {
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
         
         var buffer: [10]u32 = undefined;
@@ -627,14 +638,14 @@ test "getNeighbotsBuffer" {
 
     }
     {
-        var graph = Graph(u32, f16).init(testing.allocator);
+        var graph = Graph(u32, void, void).init(testing.allocator);
         defer graph.deinit();
 
         var buffer: [8]u32 = undefined;
                 
         const nodes = [_]u32{1,2,3,4,5,6,7,8,9,0};
         for (nodes) |i| {
-            try graph.newNode(i);
+            try graph.newNode(i, null);
         }
 
         for (nodes) |i| {
@@ -645,3 +656,23 @@ test "getNeighbotsBuffer" {
     }
 }
 
+test "struct in the edge" {
+    { 
+        const Edge = struct {
+            weight: f16,
+            capacity: f16,
+        };
+
+        // f16 in node is the demand of a node
+        const p12: Edge= .{ .weight = 10, .capacity = 1};
+        var graph = Graph(u8, f16, Edge).init(testing.allocator);
+        defer graph.deinit();
+
+        try graph.newNode(1, 8);
+        try graph.newNode(2, -8);
+
+        try graph.newEdge(1,2, p12);
+
+            
+    }
+}
