@@ -1,5 +1,6 @@
 const std = @import("std");
 const Graph = @import("graphz_lib");
+const algorithms = @import("algorithms.zig");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -22,7 +23,7 @@ pub fn main() !void {
     _ = try graph.hasEdge(2,1); //false
     
     // attempting to ask for an non existant node will yield an error 
-    std.testing.expectError(Graph.GraphError.NodeNotFound, graph.hasEdge(4,1));
+    try std.testing.expectError(Graph.GraphError.NodeNotFound, graph.hasEdge(4,1));
     
     // neighbors of 1 
     const n1 = try graph.getNeighbors(allocator, 1); // 1,2,3
@@ -30,8 +31,8 @@ pub fn main() !void {
     
     // can also be asked without dynamic memory
     var buffer: [10]u16 = undefined;
-    const n1_buff = try graph.getNeighbots(&buffer, 1);
-    std.testing.expectEqualSlice(u16, n1_buff, &[]u16{1,2,3});
+    const n1_buff = try graph.getNeighborsBuffer(&buffer, 1);
+    try std.testing.expectEqualSlices(u16, n1_buff, &[_]u16{1,2,3});
 
     // remove edge 2->3. Retuns null as the struct is void
     _ = try graph.removeEdge(2,3);
@@ -41,6 +42,8 @@ pub fn main() !void {
     _ = try graph.hasEdge(1,1); //false
     _ = try graph.hasEdge(1,2); //false
     _ = try graph.hasEdge(1,3); //false 
+    
+    try algorithms.dijkstra(graph, Graph.DijkstraOptions, 1);
 
 }
 

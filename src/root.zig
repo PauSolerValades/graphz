@@ -40,7 +40,7 @@ pub fn Graph(comptime T: type, comptime N: type, comptime S: type) type {
         const Edge = struct {
             to: *Node, // The node where the edge is directed to.
             from: *Node, // The node where the edge comes from.
-            payload: ?S, // Weight parameters. The `type` is computed at compilation time  It can be anything, and as such, it is also `Optional`
+            payload: ?S, 
         };
 
         pub fn init(allocator: Allocator) Self {
@@ -672,7 +672,5 @@ test "struct in the edge" {
         try graph.newNode(2, -8);
 
         try graph.newEdge(1,2, p12);
-
-            
     }
 }
